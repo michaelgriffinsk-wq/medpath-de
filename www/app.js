@@ -1,6 +1,11 @@
 const STORAGE_KEY = "medpath_de_vault";
 const API_KEY_STORAGE = "medpath_de_gemini_key";
-const GEMINI_MODEL = "gemini-3.8-flash";
+const GEMINI_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.1-flash-lite"
+];
 
 const MODES = [
   { name: "Holiday Sprint", capHours: 8, cls: "" },
@@ -122,22 +127,35 @@ async function callGemini(contents, customSystem = null) {
   const key = getApiKey();
   if (!key) throw new Error("No Gemini API key set. Go to the Vault tab to paste your key.");
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: customSystem || buildSystemContext() }] },
-        contents
-      })
-    }
-  );
+  let lastError = "All Gemini models are currently busy.";
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || "Gemini API error");
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response received.";
+  for (const model of GEMINI_MODELS) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: customSystem || buildSystemContext() }] },
+          contents
+        })
+      }
+    );
+
+    const data = await res.json();
+    if (res.ok) {
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response received.";
+    }
+
+    lastError = data.error?.message || `HTTP ${res.status}`;
+    if (res.status !== 503 && res.status !== 429 && !/high demand|overloaded/i.test(lastError)) {
+      throw new Error(lastError);
+    }
+  }
+
+  throw new Error(lastError);
 }
+
 
 // ================= CONFLICT DETECTION =================
 function timeToMins(t) {
