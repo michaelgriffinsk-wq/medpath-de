@@ -1,10 +1,10 @@
 const STORAGE_KEY = "medpath_de_vault";
 const API_KEY_STORAGE = "medpath_de_gemini_key";
 const GEMINI_MODELS = [
-  "gemini-3.8-flash",
-  "gemini-3.6-flash",
   "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite"
+  "gemini-3.1-flash-lite",
+  "gemini-3.6-flash",
+  "gemini-3.8-flash"
 ];
 
 const MODES = [
@@ -14,7 +14,7 @@ const MODES = [
 ];
 
 const DEFAULT_STATE = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   mode: "Holiday Sprint",
   profile: {
     mbchbPhase: "Post-4th Year Holiday (Preparing for 5th Year)",
@@ -30,7 +30,7 @@ const DEFAULT_STATE = {
       messages: [
         {
           role: "model",
-          text: "Welcome to MedPath DE Coach. Paste your Gemini API key in the Vault tab to unlock timetable analysis, Drive PDF reading, viva exams, and 1-tap schedule building."
+          text: "Welcome to MedPath DE v0.4. Paste your Gemini API key in Vault to unlock Drive PDF reading, timetable analysis, infinite AI slicing, and 1-tap schedule building."
         }
       ]
     }
@@ -51,20 +51,39 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+function normalizeNode(n) {
+  return {
+    id: n.id || `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    text: n.text || "Subtask",
+    mins: Number(n.mins) || 10,
+    done: !!n.done,
+    collapsed: !!n.collapsed,
+    children: Array.isArray(n.children) ? n.children.map(normalizeNode) : []
+  };
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return JSON.parse(JSON.stringify(DEFAULT_STATE));
     const parsed = JSON.parse(raw);
+    const tasks = (parsed.tasks || []).map((t) => {
+      // Safe migration from v3 steps[] to v4 recursive children[]
+      const rawChildren = Array.isArray(t.children) ? t.children : Array.isArray(t.steps) ? t.steps : [];
+      return {
+        ...t,
+        children: rawChildren.map(normalizeNode)
+      };
+    });
     return {
       ...JSON.parse(JSON.stringify(DEFAULT_STATE)),
       ...parsed,
       profile: { ...DEFAULT_STATE.profile, ...(parsed.profile || {}) },
-      tasks: parsed.tasks || [],
+      tasks,
       events: parsed.events || [],
       documents: parsed.documents || [],
       threads: parsed.threads && parsed.threads.length ? parsed.threads : JSON.parse(JSON.stringify(DEFAULT_STATE.threads)),
-      schemaVersion: 3
+      schemaVersion: 4
     };
   } catch (e) {
     return JSON.parse(JSON.stringify(DEFAULT_STATE));
@@ -83,9 +102,59 @@ function getApiKey() {
 let appState = loadState();
 let currentFilter = "all";
 let pendingOverride = false;
-let pendingAttachment = null; // { name, mimeType, base64 }
+let pendingAttachment = null;
 
-// ================= GEMINI AI ENGINE =================
+// Update header version label dynamically
+const verEl = document.querySelector(".version");
+if (verEl) verEl.textContent = "v0.4";
+
+// ================= RECURSIVE TREE HELPERS =================
+function findNode(nodes, targetId) {
+  for (let i = 0; i < nodes.length; i++) {
+    if (nodes[i].id === targetId) return { node: nodes[i], parentArr: nodes, index: i };
+    if (nodes[i].children && nodes[i].children.length) {
+      const found = findNode(nodes[i].children, targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function getLeafStats(nodes) {
+  let total = 0, done = 0, mins = 0;
+  for (const n of nodes) {
+    if (n.children && n.children.length > 0) {
+      const sub = getLeafStats(n.children);
+      total += sub.total;
+      done += sub.done;
+      mins += sub.mins;
+    } else {
+      total++;
+      if (n.done) done++;
+      mins += Number(n.mins || 10);
+    }
+  }
+  return { total, done, mins };
+}
+
+function findNextUnfinishedLeaf(nodes) {
+  for (const n of nodes) {
+    if (n.children && n.children.length > 0) {
+      const deeper = findNextUnfinishedLeaf(n.children);
+      if (deeper) return deeper;
+    } else if (!n.done) {
+      return n;
+    }
+  }
+  return null;
+}
+
+function setSubtreeDone(node, state) {
+  node.done = state;
+  if (node.children) node.children.forEach((c) => setSubtreeDone(c, state));
+}
+
+// ================= GEMINI AI ENGINE (WITH FALLBACK) =================
 function buildSystemContext() {
   const today = getTodayStr();
   const upcomingEvents = appState.events.map((e) => `${e.title} on ${e.date}`).join("; ") || "None";
@@ -130,26 +199,39 @@ async function callGemini(contents, customSystem = null) {
   let lastError = "All Gemini models are currently busy.";
 
   for (const model of GEMINI_MODELS) {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: customSystem || buildSystemContext() }] },
-          contents
-        })
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s max wait per model
+
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: customSystem || buildSystemContext() }] },
+            generationConfig: {
+              thinkingConfig: { thinkingLevel: "minimal" }
+            },
+            contents
+          })
+        }
+      );
+      clearTimeout(timeoutId);
+
+      const data = await res.json();
+      if (res.ok) {
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response received.";
       }
-    );
 
-    const data = await res.json();
-    if (res.ok) {
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response received.";
-    }
-
-    lastError = data.error?.message || `HTTP ${res.status}`;
-    if (res.status !== 503 && res.status !== 429 && !/high demand|overloaded/i.test(lastError)) {
-      throw new Error(lastError);
+      lastError = data.error?.message || `HTTP ${res.status}`;
+      if (res.status !== 503 && res.status !== 429 && !/high demand|overloaded|not found|thinkingLevel/i.test(lastError)) {
+        throw new Error(lastError);
+      }
+    } catch (err) {
+      clearTimeout(timeoutId);
+      lastError = err.name === "AbortError" ? `${model} timed out` : err.message;
     }
   }
 
@@ -164,11 +246,12 @@ function timeToMins(t) {
   return h * 60 + m;
 }
 
-function findConflicts(date, startTime, duration) {
+function findConflicts(date, startTime, duration, excludeTaskId = null) {
   if (!date || !startTime) return [];
   const startA = timeToMins(startTime);
   const endA = startA + Number(duration || 30);
   return appState.tasks.filter((task) => {
+    if (task.id === excludeTaskId) return false;
     if (task.date !== date || !task.startTime) return false;
     const startB = timeToMins(task.startTime);
     const endB = startB + Number(task.duration || 30);
@@ -216,6 +299,13 @@ document.getElementById("timer-stop").addEventListener("click", () => {
   clearInterval(timerInterval);
   document.getElementById("timer-bar").classList.add("hidden");
 });
+
+window.runNodeTimer = function (taskId, nodeId) {
+  const task = appState.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const found = findNode(task.children, nodeId);
+  if (found) startTimer(found.node.text, found.node.mins);
+};
 
 // ================= MODE SWITCHER =================
 document.getElementById("mode-badge").addEventListener("click", () => {
@@ -269,7 +359,7 @@ window.planEventWithCoach = function (eventId) {
   renderAll();
 };
 
-// ================= TASKS & ATOMIC SLICER =================
+// ================= TASKS & INFINITE RECURSIVE SLICER =================
 const formEl = document.getElementById("new-task-form");
 const conflictEl = document.getElementById("conflict-warning");
 
@@ -311,7 +401,7 @@ document.getElementById("add-task-btn").addEventListener("click", () => {
     done: false,
     verified: false,
     evidence: "",
-    steps: []
+    children: []
   });
 
   saveState();
@@ -323,55 +413,205 @@ document.getElementById("add-task-btn").addEventListener("click", () => {
   renderAll();
 });
 
-window.addAtomicStep = function (taskId) {
+// Add root-level sub-step from inline bar
+window.addRootSubNode = function (taskId) {
   const textInput = document.getElementById(`step-input-${taskId}`);
   const durSelect = document.getElementById(`step-dur-${taskId}`);
   const text = textInput.value.trim();
   if (!text) return;
   const task = appState.tasks.find((t) => t.id === taskId);
   if (!task) return;
-  task.steps.push({ id: Date.now().toString(), text, mins: Number(durSelect.value), done: false });
+  task.children.push(normalizeNode({ text, mins: Number(durSelect.value) }));
   saveState();
   renderAll();
 };
 
-window.autoSliceTask = async function (taskId) {
+// Add nested sub-node inside ANY node (infinite depth)
+window.openAddSubModal = function (taskId, parentNodeId) {
   const task = appState.tasks.find((t) => t.id === taskId);
   if (!task) return;
-  const btn = document.getElementById(`slice-btn-${taskId}`);
-  if (btn) btn.textContent = "Slicing...";
+  const parent = findNode(task.children, parentNodeId);
+  if (!parent) return;
+
+  const modal = document.getElementById("verify-modal");
+  document.getElementById("verify-title").textContent = `Break Down: ${parent.node.text}`;
+  document.getElementById("verify-body").innerHTML = `
+    <label class="field-label">Subtopic / Micro-Action</label>
+    <input type="text" id="sub-node-text" placeholder="e.g., Pathophysiology or Key Red Flags" />
+    <label class="field-label">Duration (5–15 min rule)</label>
+    <select id="sub-node-mins">
+      <option value="5">5 mins</option>
+      <option value="10" selected>10 mins</option>
+      <option value="15">15 mins</option>
+    </select>
+    <button class="btn primary" id="confirm-add-sub">Add Sub-Step</button>`;
+  modal.classList.remove("hidden");
+
+  document.getElementById("confirm-add-sub").addEventListener("click", () => {
+    const text = document.getElementById("sub-node-text").value.trim();
+    const mins = Number(document.getElementById("sub-node-mins").value) || 10;
+    if (!text) return;
+    parent.node.collapsed = false;
+    parent.node.children.push(normalizeNode({ text, mins }));
+    saveState();
+    modal.classList.add("hidden");
+    renderAll();
+  });
+};
+
+// Edit Top-Level Task
+window.openEditTaskModal = function (taskId) {
+  const task = appState.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const modal = document.getElementById("verify-modal");
+  document.getElementById("verify-title").textContent = "Edit Task";
+  document.getElementById("verify-body").innerHTML = `
+    <label class="field-label">Title</label>
+    <input type="text" id="edit-t-title" value="${escapeHtml(task.title)}" />
+    <label class="field-label">Track</label>
+    <select id="edit-t-track">
+      <option value="clinical" ${task.track === "clinical" ? "selected" : ""}>Clinical (MBChB)</option>
+      <option value="german" ${task.track === "german" ? "selected" : ""}>German (A1–C1)</option>
+      <option value="licensing" ${task.track === "licensing" ? "selected" : ""}>Licensing (DE → CH)</option>
+      <option value="general" ${task.track === "general" ? "selected" : ""}>General Commitment</option>
+    </select>
+    <div class="form-row">
+      <div style="flex:1">
+        <label class="field-label">Date</label>
+        <input type="date" id="edit-t-date" value="${task.date || ""}" />
+      </div>
+      <div style="flex:1">
+        <label class="field-label">Start Time</label>
+        <input type="time" id="edit-t-time" value="${task.startTime || ""}" />
+      </div>
+    </div>
+    <label class="field-label">Duration (mins)</label>
+    <input type="number" id="edit-t-dur" value="${task.duration || 30}" min="5" max="480" />
+    <button class="btn primary" id="save-edit-task">Save Changes</button>`;
+  modal.classList.remove("hidden");
+
+  document.getElementById("save-edit-task").addEventListener("click", () => {
+    const newTitle = document.getElementById("edit-t-title").value.trim();
+    if (!newTitle) return;
+    task.title = newTitle;
+    task.track = document.getElementById("edit-t-track").value;
+    task.date = document.getElementById("edit-t-date").value;
+    task.startTime = document.getElementById("edit-t-time").value;
+    task.duration = Number(document.getElementById("edit-t-dur").value) || 30;
+    saveState();
+    modal.classList.add("hidden");
+    renderAll();
+  });
+};
+
+// Edit Any Nested Node
+window.openEditNodeModal = function (taskId, nodeId) {
+  const task = appState.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const found = findNode(task.children, nodeId);
+  if (!found) return;
+
+  const modal = document.getElementById("verify-modal");
+  document.getElementById("verify-title").textContent = "Edit Micro-Task";
+  document.getElementById("verify-body").innerHTML = `
+    <label class="field-label">Action / Subtopic</label>
+    <input type="text" id="edit-n-text" value="${escapeHtml(found.node.text)}" />
+    <label class="field-label">Duration (mins)</label>
+    <select id="edit-n-mins">
+      <option value="5" ${found.node.mins == 5 ? "selected" : ""}>5 mins</option>
+      <option value="10" ${found.node.mins == 10 ? "selected" : ""}>10 mins</option>
+      <option value="15" ${found.node.mins == 15 ? "selected" : ""}>15 mins</option>
+    </select>
+    <button class="btn primary" id="save-edit-node">Save Changes</button>`;
+  modal.classList.remove("hidden");
+
+  document.getElementById("save-edit-node").addEventListener("click", () => {
+    const newText = document.getElementById("edit-n-text").value.trim();
+    if (!newText) return;
+    found.node.text = newText;
+    found.node.mins = Number(document.getElementById("edit-n-mins").value) || 10;
+    saveState();
+    modal.classList.add("hidden");
+    renderAll();
+  });
+};
+
+// AI Auto-Slice (Works on Top-Level Task OR Any Nested Node!)
+window.autoSliceNode = async function (taskId, nodeId = null, btnEl = null) {
+  const task = appState.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+
+  let targetText = task.title;
+  let targetArray = task.children;
+  let targetNode = null;
+
+  if (nodeId) {
+    const found = findNode(task.children, nodeId);
+    if (!found) return;
+    targetNode = found.node;
+    targetText = `${task.title} → ${found.node.text}`;
+    targetArray = found.node.children;
+  }
+
+  const origLabel = btnEl ? btnEl.textContent : "";
+  if (btnEl) {
+    btnEl.textContent = "...";
+    btnEl.disabled = true;
+  }
 
   try {
-    const prompt = `Break the topic "${task.title}" (track: ${task.track}, MBChB: ${appState.profile.mbchbPhase}, German: ${appState.profile.germanLevel}) into 4 to 6 concrete atomic study steps. Each step MUST take 5, 10, or 15 minutes. Reply ONLY with a raw JSON array: [{"text":"...","mins":10}]`;
+    const prompt = `Break down "${targetText}" (track: ${task.track}, MBChB: ${appState.profile.mbchbPhase}, German: ${appState.profile.germanLevel}) into 3 to 5 smaller, concrete subtopics or micro-actions. Each must take 5, 10, or 15 minutes. Reply ONLY with a raw JSON array: [{"text":"...","mins":10}]`;
     const reply = await callGemini([{ role: "user", parts: [{ text: prompt }] }], "Return ONLY a valid JSON array with no markdown or extra text.");
     const cleaned = reply.replace(/```json|```/g, "").trim();
     const steps = JSON.parse(cleaned);
-    steps.forEach((s, idx) => {
-      task.steps.push({
-        id: `${Date.now()}-${idx}`,
-        text: s.text,
-        mins: [5, 10, 15].includes(Number(s.mins)) ? Number(s.mins) : 10,
-        done: false
-      });
+    if (targetNode) targetNode.collapsed = false;
+    steps.forEach((s) => {
+      targetArray.push(
+        normalizeNode({
+          text: s.text,
+          mins: [5, 10, 15].includes(Number(s.mins)) ? Number(s.mins) : 10
+        })
+      );
     });
     saveState();
     renderAll();
   } catch (err) {
     alert("Auto-Slice failed: " + err.message);
-    if (btn) btn.textContent = "✨ Auto-Slice";
+    if (btnEl) {
+      btnEl.textContent = origLabel;
+      btnEl.disabled = false;
+    }
   }
 };
 
-window.toggleStep = function (taskId, stepId) {
+window.toggleNodeDone = function (taskId, nodeId) {
   const task = appState.tasks.find((t) => t.id === taskId);
   if (!task) return;
-  const step = task.steps.find((s) => s.id === stepId);
-  if (step) step.done = !step.done;
+  const found = findNode(task.children, nodeId);
+  if (found) setSubtreeDone(found.node, !found.node.done);
   saveState();
   renderAll();
 };
 
-window.toggleGeneralTask = function (taskId) {
+window.toggleNodeCollapse = function (taskId, nodeId) {
+  const task = appState.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const found = findNode(task.children, nodeId);
+  if (found) found.node.collapsed = !found.node.collapsed;
+  saveState();
+  renderPlan();
+};
+
+window.deleteNode = function (taskId, nodeId) {
+  const task = appState.tasks.find((t) => t.id === taskId);
+  if (!task) return;
+  const found = findNode(task.children, nodeId);
+  if (found) found.parentArr.splice(found.index, 1);
+  saveState();
+  renderAll();
+};
+
+window.toggleTaskDone = function (taskId) {
   const task = appState.tasks.find((t) => t.id === taskId);
   if (!task) return;
   task.done = !task.done;
@@ -385,12 +625,7 @@ window.deleteTask = function (taskId) {
   renderAll();
 };
 
-window.runStepTimer = function (label, mins) {
-  startTimer(label, mins);
-};
-
 // ================= PROOF OF DONE GATE =================
-let activeVerifyTaskId = null;
 let currentExamQuestions = "";
 
 document.getElementById("close-verify-btn").addEventListener("click", () => {
@@ -400,22 +635,20 @@ document.getElementById("close-verify-btn").addEventListener("click", () => {
 window.openVerifyGate = async function (taskId) {
   const task = appState.tasks.find((t) => t.id === taskId);
   if (!task) return;
-  activeVerifyTaskId = taskId;
   const modal = document.getElementById("verify-modal");
   const body = document.getElementById("verify-body");
   document.getElementById("verify-title").textContent = `Verify: ${task.title}`;
   modal.classList.remove("hidden");
 
-  const hasKey = !!getApiKey() && navigator.onLine;
-  if (!hasKey) {
+  if (!getApiKey() || !navigator.onLine) {
     renderOfflineTeachBack(task, body);
     return;
   }
 
   body.innerHTML = `<p class="muted">Generating 3 viva/exam questions for "${escapeHtml(task.title)}"...</p>`;
   try {
-    const stepSummary = task.steps.map((s) => s.text).join(", ") || task.title;
-    const prompt = `Create 3 concise, high-yield verification questions for "${task.title}" (track: ${task.track}, subtopics: ${stepSummary}, German level: ${appState.profile.germanLevel}). Do NOT include answers yet.`;
+    const subSummary = task.children.map((c) => c.text).join(", ") || task.title;
+    const prompt = `Create 3 concise, high-yield verification questions for "${task.title}" (track: ${task.track}, subtopics: ${subSummary}, German level: ${appState.profile.germanLevel}). Do NOT include answers yet.`;
     currentExamQuestions = await callGemini([{ role: "user", parts: [{ text: prompt }] }]);
 
     body.innerHTML = `
@@ -463,15 +696,12 @@ async function gradeVerifyAnswers(task) {
 function renderOfflineTeachBack(task, container, note = "Offline Mode: Prove mastery before closing this topic.") {
   container.innerHTML = `
     <p class="muted">${escapeHtml(note)}</p>
-    <textarea id="offline-evidence" rows="4" placeholder="Write 3 key takeaways + 1 clinical red flag (or 3 German sentences you mastered)..."></textarea>
+    <textarea id="offline-evidence" rows="4" placeholder="Write 3 key takeaways + 1 clinical red flag (or 3 German sentences)..."></textarea>
     <button class="btn success" id="save-offline-verify">Save Evidence & Mark Verified ✓</button>`;
 
   document.getElementById("save-offline-verify").addEventListener("click", () => {
     const text = document.getElementById("offline-evidence").value.trim();
-    if (text.length < 15) {
-      alert("Write at least a brief summary to prove completion.");
-      return;
-    }
+    if (text.length < 15) return alert("Write at least a brief summary to prove completion.");
     task.done = true;
     task.verified = true;
     task.evidence = text;
@@ -518,10 +748,7 @@ document.getElementById("del-thread-btn").addEventListener("click", () => {
 document.getElementById("chat-file-input").addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (!file) return;
-  if (file.size > 12 * 1024 * 1024) {
-    alert("File too large. Please keep PDFs/images under 12 MB.");
-    return;
-  }
+  if (file.size > 12 * 1024 * 1024) return alert("File too large. Keep PDFs/images under 12 MB.");
   const reader = new FileReader();
   reader.onload = () => {
     const base64 = reader.result.split(",")[1];
@@ -544,12 +771,11 @@ async function sendCoachMessage(overrideText = null) {
   if (!text && !pendingAttachment) return;
 
   const thread = getActiveThread();
-  const userMsg = {
+  thread.messages.push({
     role: "user",
     text: text || "Analyze this attached file and advise me.",
     attachmentName: pendingAttachment ? pendingAttachment.name : null
-  };
-  thread.messages.push(userMsg);
+  });
 
   const currentFile = pendingAttachment;
   pendingAttachment = null;
@@ -559,7 +785,6 @@ async function sendCoachMessage(overrideText = null) {
   saveState();
   renderCoach();
 
-  // Build Gemini contents from last 10 messages
   const history = thread.messages.slice(-10).map((m, idx, arr) => {
     const parts = [{ text: m.text }];
     if (idx === arr.length - 1 && currentFile) {
@@ -593,8 +818,7 @@ document.querySelectorAll("#coach-quick-actions .pill").forEach((pill) => {
 window.injectPlanFromChat = function (encodedJson, btnEl) {
   try {
     const items = JSON.parse(decodeURIComponent(encodedJson));
-    let added = 0;
-    let conflicts = 0;
+    let added = 0, conflicts = 0;
     items.forEach((item, idx) => {
       if (findConflicts(item.date, item.startTime, item.duration).length > 0) conflicts++;
       appState.tasks.unshift({
@@ -607,12 +831,7 @@ window.injectPlanFromChat = function (encodedJson, btnEl) {
         done: false,
         verified: false,
         evidence: "",
-        steps: (item.steps || []).map((s, sIdx) => ({
-          id: `${Date.now()}-${idx}-${sIdx}`,
-          text: s.text,
-          mins: Number(s.mins) || 10,
-          done: false
-        }))
+        children: (item.steps || item.children || []).map((s) => normalizeNode(s))
       });
       added++;
     });
@@ -625,7 +844,7 @@ window.injectPlanFromChat = function (encodedJson, btnEl) {
   }
 };
 
-// ================= DOCUMENT EXPIRY TRACKER =================
+// ================= DOCUMENT EXPIRY & PROFILE =================
 document.getElementById("add-doc-btn").addEventListener("click", () => {
   const name = document.getElementById("doc-name").value.trim();
   const issueDate = document.getElementById("doc-date").value;
@@ -642,7 +861,6 @@ window.deleteDoc = function (id) {
   renderRoadmap();
 };
 
-// ================= PROFILE & API KEY =================
 document.getElementById("save-profile-btn").addEventListener("click", () => {
   appState.profile.mbchbPhase = document.getElementById("profile-mbchb").value.trim() || DEFAULT_STATE.profile.mbchbPhase;
   appState.profile.germanLevel = document.getElementById("profile-german").value;
@@ -670,8 +888,8 @@ function renderBriefing() {
 
   const todayTasks = appState.tasks.filter((t) => t.date === today);
   const totalMins = todayTasks.reduce((sum, t) => {
-    const stepMins = t.steps.reduce((s, st) => s + st.mins, 0);
-    return sum + (stepMins > 0 ? stepMins : Number(t.duration || 30));
+    const stats = getLeafStats(t.children);
+    return sum + (stats.mins > 0 ? stats.mins : Number(t.duration || 30));
   }, 0);
 
   const modeObj = MODES.find((m) => m.name === appState.mode) || MODES[0];
@@ -688,7 +906,7 @@ function renderBriefing() {
       ? `Heads up: You've hit your ${modeObj.name} daily cap.`
       : `${appState.profile.germanLevel} German • ${todayTasks.length} item(s) scheduled today.`;
 
-  // Important Events
+  // Events
   const eventsEl = document.getElementById("events-list");
   if (appState.events.length === 0) {
     eventsEl.innerHTML = `<p class="muted" style="margin:0;">No upcoming events. Tap + Event to add CATs, exams, or trips.</p>`;
@@ -712,29 +930,29 @@ function renderBriefing() {
       .join("");
   }
 
-  // Next Atomic Step
-  let nextStep = null;
-  let parentTitle = "";
+  // Deepest Unfinished Leaf Step
+  let nextLeaf = null, parentTaskId = "", parentTitle = "";
   for (const t of appState.tasks) {
-    const found = t.steps.find((s) => !s.done);
+    const found = findNextUnfinishedLeaf(t.children);
     if (found) {
-      nextStep = found;
+      nextLeaf = found;
+      parentTaskId = t.id;
       parentTitle = t.title;
       break;
     }
   }
   const nextBox = document.getElementById("next-action-content");
-  if (nextStep) {
+  if (nextLeaf) {
     nextBox.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
         <div>
-          <div style="color:var(--text); font-weight:600;">${escapeHtml(nextStep.text)}</div>
-          <div class="muted" style="margin:0; font-size:0.78rem;">From: ${escapeHtml(parentTitle)} (${nextStep.mins}m)</div>
+          <div style="color:var(--text); font-weight:600;">${escapeHtml(nextLeaf.text)}</div>
+          <div class="muted" style="margin:0; font-size:0.78rem;">From: ${escapeHtml(parentTitle)} (${nextLeaf.mins}m)</div>
         </div>
-        <button class="play-btn" onclick="runStepTimer('${escapeHtml(nextStep.text).replace(/'/g, "\\'")}', ${nextStep.mins})">▶ ${nextStep.mins}m</button>
+        <button class="micro-btn play" style="padding:6px 10px;" onclick="runNodeTimer('${parentTaskId}', '${nextLeaf.id}')">▶ ${nextLeaf.mins}m</button>
       </div>`;
   } else {
-    nextBox.textContent = "No pending atomic steps. Slice a topic in Plan!";
+    nextBox.textContent = "No pending atomic steps. Slice any task in Plan!";
   }
 
   // Timeline
@@ -755,6 +973,38 @@ function renderBriefing() {
           .join("");
 }
 
+function renderNodeTree(taskId, nodes) {
+  if (!nodes || nodes.length === 0) return "";
+  return nodes
+    .map((n) => {
+      const hasKids = n.children && n.children.length > 0;
+      const toggleHtml = hasKids
+        ? `<button class="node-toggle" onclick="toggleNodeCollapse('${taskId}', '${n.id}')">${n.collapsed ? "▸" : "▾"}</button>`
+        : `<span class="node-toggle">•</span>`;
+
+      return `
+      <div class="node-block">
+        <div class="node-row">
+          <div class="node-left">
+            ${toggleHtml}
+            <input type="checkbox" ${n.done ? "checked" : ""} onchange="toggleNodeDone('${taskId}', '${n.id}')" />
+            <span class="step-text ${n.done ? "done" : ""}">${escapeHtml(n.text)}</span>
+            ${!hasKids ? `<span class="step-dur">${n.mins}m</span>` : ""}
+          </div>
+          <div class="node-actions">
+            ${!hasKids ? `<button class="micro-btn play" title="Start timer" onclick="runNodeTimer('${taskId}', '${n.id}')">▶</button>` : ""}
+            <button class="micro-btn" title="Add sub-step" onclick="openAddSubModal('${taskId}', '${n.id}')">+</button>
+            <button class="micro-btn ai" title="AI break down further" onclick="autoSliceNode('${taskId}', '${n.id}', this)">✨</button>
+            <button class="micro-btn" title="Edit" onclick="openEditNodeModal('${taskId}', '${n.id}')">✎</button>
+            <button class="micro-btn danger" title="Delete" onclick="deleteNode('${taskId}', '${n.id}')">✕</button>
+          </div>
+        </div>
+        ${hasKids && !n.collapsed ? `<div class="sub-tree">${renderNodeTree(taskId, n.children)}</div>` : ""}
+      </div>`;
+    })
+    .join("");
+}
+
 function renderPlan() {
   const listEl = document.getElementById("task-list");
   const filtered = currentFilter === "all" ? appState.tasks : appState.tasks.filter((t) => t.track === currentFilter);
@@ -766,61 +1016,48 @@ function renderPlan() {
 
   listEl.innerHTML = filtered
     .map((t) => {
+      const stats = getLeafStats(t.children);
       const isGeneral = t.track === "general";
-      const stepsDone = t.steps.filter((s) => s.done).length;
-      const stepsHtml = t.steps
-        .map(
-          (s) => `
-        <div class="step-item">
-          <div class="step-left">
-            <input type="checkbox" ${s.done ? "checked" : ""} onchange="toggleStep('${t.id}', '${s.id}')" />
-            <span class="step-text ${s.done ? "done" : ""}">${escapeHtml(s.text)}</span>
-          </div>
-          <span class="step-dur">${s.mins}m</span>
-          <button class="play-btn" onclick="runStepTimer('${escapeHtml(s.text).replace(/'/g, "\\'")}', ${s.mins})">▶</button>
-        </div>`
-        )
-        .join("");
 
       return `
       <div class="task-card track-${t.track}">
         <div class="task-header">
-          <div style="display:flex; align-items:center; gap:8px;">
-            ${isGeneral ? `<input type="checkbox" style="width:18px;height:18px;margin:0;" ${t.done ? "checked" : ""} onchange="toggleGeneralTask('${t.id}')" />` : ""}
+          <div style="display:flex; align-items:center; gap:8px; flex:1;">
+            <input type="checkbox" style="width:18px;height:18px;margin:0;flex-shrink:0;" ${t.done ? "checked" : ""} onchange="toggleTaskDone('${t.id}')" />
             <div>
               <div class="task-title ${t.done ? "done" : ""}">${escapeHtml(t.title)}</div>
               <div class="task-meta">
                 <span>${t.track.toUpperCase()}</span>
                 ${t.date ? `<span>📅 ${t.date}</span>` : ""}
                 ${t.startTime ? `<span>⏰ ${t.startTime} (${t.duration}m)</span>` : ""}
-                ${!isGeneral ? `<span>🧩 ${stepsDone}/${t.steps.length}</span>` : ""}
+                <span>🧩 ${stats.done}/${stats.total}</span>
                 ${t.verified ? `<span class="verified-tag">✓ VERIFIED</span>` : ""}
               </div>
             </div>
           </div>
-          <button class="del-btn" onclick="deleteTask('${t.id}')">✕</button>
+          <div class="icon-group">
+            <button class="icon-btn" title="Edit task" onclick="openEditTaskModal('${t.id}')">✎</button>
+            <button class="del-btn" title="Delete task" onclick="deleteTask('${t.id}')">✕</button>
+          </div>
         </div>
 
-        ${
-          !isGeneral
-            ? `<div class="task-actions-row">
-                <button class="ai-btn" id="slice-btn-${t.id}" onclick="autoSliceTask('${t.id}')">✨ Auto-Slice</button>
-                ${!t.verified ? `<button class="verify-btn" onclick="openVerifyGate('${t.id}')">✓ Verify & Complete</button>` : ""}
-              </div>
-              <div class="steps-list">
-                ${stepsHtml}
-                <div class="add-step-row">
-                  <input type="text" id="step-input-${t.id}" placeholder="Add 5–15m atomic step..." />
-                  <select id="step-dur-${t.id}">
-                    <option value="5">5m</option>
-                    <option value="10" selected>10m</option>
-                    <option value="15">15m</option>
-                  </select>
-                  <button onclick="addAtomicStep('${t.id}')">+</button>
-                </div>
-              </div>`
-            : ""
-        }
+        <div class="task-actions-row">
+          <button class="ai-btn" onclick="autoSliceNode('${t.id}', null, this)">✨ AI Slice</button>
+          ${!isGeneral && !t.verified ? `<button class="verify-btn" onclick="openVerifyGate('${t.id}')">✓ Verify & Complete</button>` : ""}
+        </div>
+
+        <div class="steps-list">
+          ${renderNodeTree(t.id, t.children)}
+          <div class="add-step-row">
+            <input type="text" id="step-input-${t.id}" placeholder="Add 5–15m step or subtopic..." />
+            <select id="step-dur-${t.id}">
+              <option value="5">5m</option>
+              <option value="10" selected>10m</option>
+              <option value="15">15m</option>
+            </select>
+            <button onclick="addRootSubNode('${t.id}')">+</button>
+          </div>
+        </div>
       </div>`;
     })
     .join("");
@@ -838,7 +1075,6 @@ function renderCoach() {
     .map((m) => {
       let displayText = m.text;
       let planBtnHtml = "";
-
       const planMatch = m.text.match(/```plan\s*([\s\S]*?)```/);
       if (planMatch) {
         displayText = m.text.replace(planMatch[0], "").trim();
@@ -849,7 +1085,6 @@ function renderCoach() {
             <button class="btn success" onclick="injectPlanFromChat('${encoded}', this)">➕ Add Plan to Schedule</button>
           </div>`;
       }
-
       return `
       <div class="msg ${m.role}">
         ${m.attachmentName ? `<div class="msg-attach">📎 ${escapeHtml(m.attachmentName)}</div>` : ""}
@@ -949,7 +1184,8 @@ document.getElementById("import-input").addEventListener("change", (e) => {
     try {
       const imported = JSON.parse(event.target.result);
       if (!imported.schemaVersion) throw new Error("Invalid vault file");
-      appState = { ...JSON.parse(JSON.stringify(DEFAULT_STATE)), ...imported, schemaVersion: 3 };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(imported));
+      appState = loadState();
       saveState();
       renderAll();
       document.getElementById("vault-status").textContent = "Vault restored successfully!";
