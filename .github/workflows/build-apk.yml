@@ -24,6 +24,31 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
+      - name: Configure Stable Debug Keystore
+        id: keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p ~/.android
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
+            echo "created=false" >> $GITHUB_OUTPUT
+          else
+            keytool -genkey -v -keystore ~/.android/debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            base64 -w 0 ~/.android/debug.keystore > debug-keystore-base64.txt
+            echo "created=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload One-Time Keystore Text
+        if: steps.keystore.outputs.created == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SAVE-TO-SECRET-keystore
+          path: debug-keystore-base64.txt
+
       - name: Install dependencies
         run: npm install
 
@@ -33,8 +58,9 @@ jobs:
           npx cap sync android
           sed -i 's/<\/manifest>/<uses-permission android:name="android.permission.RECORD_AUDIO" \/><uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" \/><\/manifest>/' android/app/src/main/AndroidManifest.xml
 
-      - name: Build Debug APK
+      - name: Bump versionCode & Build Debug APK
         run: |
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/" android/app/build.gradle
           cd android
           chmod +x gradlew
           ./gradlew assembleDebug
@@ -42,5 +68,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MedPath-DE-v0.1-debug
+          name: MedPath-DE-build-${{ github.run_number }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
