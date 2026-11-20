@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>MedPath DE</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>MedPath DE</h1>
+      <span class="badge" id="mode-badge">Holiday Sprint</span>
+    </div>
+    <span class="version">v0.1</span>
+  </header>
+
+  <main id="app-content">
+    <!-- Briefing View -->
+    <section id="view-briefing" class="view active">
+      <div class="card">
+        <h2>Morning Briefing</h2>
+        <p class="muted" id="briefing-date"></p>
+        <p>System online. Vault schema <strong id="schema-ver">v1</strong> is active and ready for Stage 2.</p>
+      </div>
+      <div class="card">
+        <h3>Quick Smoke Test</h3>
+        <p class="muted">Add a test note below, close the app completely, and reopen it to verify local persistence.</p>
+        <input type="text" id="test-note-input" placeholder="e.g., German A1: Trennbare Verben" />
+        <button class="btn primary" id="save-note-btn">Save to Local Vault</button>
+        <p class="saved-status" id="saved-note-display"></p>
+      </div>
+    </section>
+
+    <!-- Plan View -->
+    <section id="view-plan" class="view">
+      <div class="card">
+        <h2>Weekly PA Board</h2>
+        <p class="muted">Stage 2: 5–15 min atomic task slicer & conflict detector will live here.</p>
+      </div>
+    </section>
+
+    <!-- Roadmap View -->
+    <section id="view-roadmap" class="view">
+      <div class="card">
+        <h2>10-Year Pathway</h2>
+        <ul class="pathway-list">
+          <li><strong>Phase 1:</strong> MBChB 5th–6th Yr + German A1 → B2</li>
+          <li><strong>Phase 2:</strong> Internship + Medical German C1 (FSP)</li>
+          <li><strong>Phase 3:</strong> German Approbation (KP) + Residency</li>
+          <li><strong>Phase 4:</strong> EU Citizenship + Facharzt</li>
+          <li><strong>Phase 5:</strong> Switzerland (MEBEKO Indirect Recognition)</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- Vault View -->
+    <section id="view-vault" class="view">
+      <div class="card">
+        <h2>Portable Vault</h2>
+        <p class="muted">Export your entire journey as a single JSON file to move between devices.</p>
+        <div class="btn-row">
+          <button class="btn primary" id="export-btn">Export Vault (.json)</button>
+          <label class="btn secondary">
+            Import Vault
+            <input type="file" id="import-input" accept=".json" hidden />
+          </label>
+        </div>
+        <p class="muted small" id="vault-status"></p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-target="view-briefing">Briefing</button>
+    <button class="nav-btn" data-target="view-plan">Plan</button>
+    <button class="nav-btn" data-target="view-roadmap">Roadmap</button>
+    <button class="nav-btn" data-target="view-vault">Vault</button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
