@@ -12,7 +12,7 @@
       <h1>MedPath DE</h1>
       <button class="badge clickable" id="mode-badge" title="Tap to switch mode">Holiday Sprint</button>
     </div>
-    <span class="version">v0.2</span>
+    <span class="version">v0.3</span>
   </header>
 
   <main id="app-content">
@@ -35,6 +35,22 @@
         <p class="muted" id="pa-message" style="margin-top: 10px; margin-bottom: 0;"></p>
       </div>
 
+      <!-- Important Events -->
+      <div class="card">
+        <div class="card-top">
+          <h3>Important Events</h3>
+          <button class="btn-mini" id="toggle-event-form-btn">+ Event</button>
+        </div>
+        <div id="new-event-form" class="hidden" style="margin-bottom: 10px;">
+          <input type="text" id="event-title" placeholder="e.g., Pediatrics CAT or Goethe A2 Exam" />
+          <div class="form-row">
+            <input type="date" id="event-date" />
+            <button class="btn primary" id="save-event-btn" style="flex:0.6; margin-bottom:10px;">Add</button>
+          </div>
+        </div>
+        <div id="events-list"></div>
+      </div>
+
       <div class="card" id="next-action-card">
         <h3>Next Atomic Step</h3>
         <div id="next-action-content" class="muted">No pending atomic steps. Add a task in Plan!</div>
@@ -52,11 +68,9 @@
         <button class="btn primary" id="toggle-form-btn">+ New Task / Commitment</button>
       </div>
 
-      <!-- New Task Form -->
       <div class="card hidden" id="new-task-form">
         <h3>Add to Schedule</h3>
         <input type="text" id="task-title" placeholder="e.g., Neonatal Sepsis or Band Rehearsal" />
-        
         <div class="form-row">
           <select id="task-track">
             <option value="clinical">Clinical (MBChB)</option>
@@ -66,21 +80,17 @@
           </select>
           <input type="date" id="task-date" />
         </div>
-
         <div class="form-row">
-          <input type="time" id="task-time" placeholder="Start time" />
-          <input type="number" id="task-duration" placeholder="Mins (e.g. 45)" min="5" max="480" value="30" />
+          <input type="time" id="task-time" />
+          <input type="number" id="task-duration" placeholder="Mins" min="5" max="480" value="30" />
         </div>
-
         <div id="conflict-warning" class="conflict-box hidden"></div>
-
         <div class="btn-row">
           <button class="btn primary" id="add-task-btn">Save Task</button>
           <button class="btn secondary" id="cancel-task-btn">Cancel</button>
         </div>
       </div>
 
-      <!-- Track Filter Pills -->
       <div class="filter-bar" id="track-filters">
         <button class="pill active" data-track="all">All</button>
         <button class="pill" data-track="clinical">Clinical</button>
@@ -92,11 +102,43 @@
       <div id="task-list"></div>
     </section>
 
+    <!-- COACH VIEW (AI PA & TUTOR) -->
+    <section id="view-coach" class="view coach-view">
+      <div class="coach-toolbar">
+        <select id="thread-select"></select>
+        <button class="btn-mini" id="new-thread-btn">+ Chat</button>
+        <button class="btn-mini danger" id="del-thread-btn" title="Delete thread">✕</button>
+      </div>
+
+      <div class="filter-bar" id="coach-quick-actions">
+        <button class="pill" data-prompt="Give me a 3-question Clinical Viva/OSCE drill based on my current MBChB phase and recent topics. Wait for my answers before grading.">🩺 Clinical Viva</button>
+        <button class="pill" data-prompt="Give me a German practice drill (grammar + translation) strictly at my current CEFR level. Wait for my answers before grading.">🇩🇪 German Drill</button>
+        <button class="pill" data-prompt="Give me today's C1 Medical German Drip-Feed: 3 high-yield patient-history phrases (Anamnese) linked to my current clinical focus, with pronunciation hints and English translations.">💊 C1 Drip-Feed</button>
+        <button class="pill" data-prompt="Review my upcoming events and current schedule. Propose a balanced weekly study plan with 5-15 minute atomic steps that avoids double-booking my existing commitments.">📅 Plan My Week</button>
+      </div>
+
+      <div id="chat-messages" class="chat-messages"></div>
+
+      <div class="chat-composer">
+        <div id="file-chip" class="file-chip hidden">
+          <span id="file-chip-name"></span>
+          <button id="clear-file-btn">✕</button>
+        </div>
+        <div class="composer-row">
+          <label class="attach-btn" title="Attach Drive PDF, Notes, or Timetable Photo">
+            📎
+            <input type="file" id="chat-file-input" accept="image/*,application/pdf,.txt,.md" hidden />
+          </label>
+          <textarea id="chat-input" rows="1" placeholder="Ask PA, upload timetable/Drive PDF..."></textarea>
+          <button class="btn-mini" id="chat-send-btn">Send</button>
+        </div>
+      </div>
+    </section>
+
     <!-- ROADMAP VIEW -->
     <section id="view-roadmap" class="view">
       <div class="card">
         <h2>10-Year Pathway</h2>
-        <p class="muted">Track your macro progression from MBChB to Switzerland.</p>
         <ul class="pathway-list">
           <li><strong>Phase 1:</strong> MBChB 5th–6th Yr + German A1 → B2</li>
           <li><strong>Phase 2:</strong> Internship + Medical German C1 (FSP)</li>
@@ -105,6 +147,18 @@
           <li><strong>Phase 5:</strong> Switzerland (MEBEKO Indirect Recognition)</li>
         </ul>
       </div>
+
+      <div class="card">
+        <h3>Document Expiry Tracker (90-Day Rule)</h3>
+        <p class="muted">Track Approbation papers (Police Clearance, Good Standing, Medical Fitness).</p>
+        <input type="text" id="doc-name" placeholder="e.g., Police Clearance Certificate" />
+        <div class="form-row">
+          <input type="date" id="doc-date" title="Issue Date" />
+          <button class="btn primary" id="add-doc-btn" style="flex:0.6; margin-bottom:10px;">Track</button>
+        </div>
+        <div id="doc-list"></div>
+      </div>
+
       <div class="card">
         <h3>Track Activity</h3>
         <div id="roadmap-stats" class="stats-grid"></div>
@@ -114,8 +168,33 @@
     <!-- VAULT VIEW -->
     <section id="view-vault" class="view">
       <div class="card">
+        <h2>Curriculum Profile</h2>
+        <p class="muted">Your Coach uses this to tailor study plans, clinical vivas, and German drills.</p>
+        <label class="field-label">Current MBChB Phase / Rotation</label>
+        <input type="text" id="profile-mbchb" placeholder="e.g., Post-4th Yr Holiday → 5th Yr Pediatrics" />
+        <label class="field-label">Current German CEFR Level</label>
+        <select id="profile-german">
+          <option value="A1">A1 (Beginner)</option>
+          <option value="A2">A2 (Elementary)</option>
+          <option value="B1">B1 (Intermediate)</option>
+          <option value="B2">B2 (Upper Intermediate)</option>
+          <option value="C1">Medical C1 (FSP Prep)</option>
+        </select>
+        <button class="btn primary" id="save-profile-btn">Save Profile</button>
+        <p class="muted small" id="profile-status"></p>
+      </div>
+
+      <div class="card">
+        <h2>Gemini AI Brain (Local Only)</h2>
+        <p class="muted">Stored strictly on your phone. Never uploaded to GitHub.</p>
+        <input type="password" id="api-key-input" placeholder="Paste Gemini API key (AIza...)" />
+        <button class="btn primary" id="save-api-key-btn">Save API Key</button>
+        <p class="muted small" id="api-key-status"></p>
+      </div>
+
+      <div class="card">
         <h2>Portable Vault</h2>
-        <p class="muted">Schema <strong id="schema-ver">v2</strong>. Export your journey as a single JSON file to transfer to any device.</p>
+        <p class="muted">Schema <strong id="schema-ver">v3</strong>. Export before updating the APK or switching phones.</p>
         <div class="btn-row">
           <button class="btn primary" id="export-btn">Export Vault (.json)</button>
           <label class="btn secondary">
@@ -128,7 +207,18 @@
     </section>
   </main>
 
-  <!-- Floating Micro-Timer Bar -->
+  <!-- PROOF OF DONE MODAL -->
+  <div id="verify-modal" class="modal hidden">
+    <div class="modal-card">
+      <div class="card-top">
+        <h3 id="verify-title">Proof of Done</h3>
+        <button class="del-btn" id="close-verify-btn">✕</button>
+      </div>
+      <div id="verify-body"></div>
+    </div>
+  </div>
+
+  <!-- FLOATING MICRO-TIMER -->
   <div id="timer-bar" class="timer-bar hidden">
     <div class="timer-info">
       <span id="timer-label" class="timer-label">Atomic Step</span>
@@ -143,6 +233,7 @@
   <nav class="bottom-nav">
     <button class="nav-btn active" data-target="view-briefing">Briefing</button>
     <button class="nav-btn" data-target="view-plan">Plan</button>
+    <button class="nav-btn" data-target="view-coach">Coach</button>
     <button class="nav-btn" data-target="view-roadmap">Roadmap</button>
     <button class="nav-btn" data-target="view-vault">Vault</button>
   </nav>
