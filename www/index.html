@@ -247,5 +247,27 @@
   </nav>
 
   <script src="app.js"></script>
+
+    <!-- GEMINI LIVE VOICE MODAL -->
+  <div id="live-modal" class="modal hidden">
+    <div class="modal-card live-card">
+      <div class="card-top">
+        <h3>🎙️ MedPath Live</h3>
+        <button class="btn-mini secondary" id="live-earphone-btn">🔊 Speaker (Safe)</button>
+      </div>
+      <div class="live-orb-wrap">
+        <div id="live-orb" class="live-orb"></div>
+        <div id="live-status" class="muted" style="margin-top:10px;">Connecting...</div>
+      </div>
+      <div id="live-transcript" class="live-transcript"></div>
+      <div class="btn-row" style="margin-top:12px;">
+        <button class="btn primary" id="live-interrupt-btn">✋ Interrupt</button>
+        <button class="btn danger-btn" id="live-end-btn">End & Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="live.js"></script>
 </body>
 </html>
