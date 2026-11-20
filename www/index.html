@@ -8,42 +8,95 @@
 </head>
 <body>
   <header class="app-header">
-    <div>
+    <div class="header-left">
       <h1>MedPath DE</h1>
-      <span class="badge" id="mode-badge">Holiday Sprint</span>
+      <button class="badge clickable" id="mode-badge" title="Tap to switch mode">Holiday Sprint</button>
     </div>
-    <span class="version">v0.1</span>
+    <span class="version">v0.2</span>
   </header>
 
   <main id="app-content">
-    <!-- Briefing View -->
+    <!-- BRIEFING VIEW -->
     <section id="view-briefing" class="view active">
       <div class="card">
-        <h2>Morning Briefing</h2>
-        <p class="muted" id="briefing-date"></p>
-        <p>System online. Vault schema <strong id="schema-ver">v1</strong> is active and ready for Stage 2.</p>
+        <div class="card-top">
+          <h2>Morning Briefing</h2>
+          <span class="muted small-date" id="briefing-date"></span>
+        </div>
+        <div class="load-box">
+          <div class="load-labels">
+            <span>Today's Load</span>
+            <span id="load-text">0.0 / 8.0 hrs</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="load-bar" style="width: 0%"></div>
+          </div>
+        </div>
+        <p class="muted" id="pa-message" style="margin-top: 10px; margin-bottom: 0;"></p>
       </div>
+
+      <div class="card" id="next-action-card">
+        <h3>Next Atomic Step</h3>
+        <div id="next-action-content" class="muted">No pending atomic steps. Add a task in Plan!</div>
+      </div>
+
       <div class="card">
-        <h3>Quick Smoke Test</h3>
-        <p class="muted">Add a test note below, close the app completely, and reopen it to verify local persistence.</p>
-        <input type="text" id="test-note-input" placeholder="e.g., German A1: Trennbare Verben" />
-        <button class="btn primary" id="save-note-btn">Save to Local Vault</button>
-        <p class="saved-status" id="saved-note-display"></p>
+        <h3>Today's Timeline</h3>
+        <div id="today-timeline" class="timeline-list"></div>
       </div>
     </section>
 
-    <!-- Plan View -->
+    <!-- PLAN VIEW -->
     <section id="view-plan" class="view">
-      <div class="card">
-        <h2>Weekly PA Board</h2>
-        <p class="muted">Stage 2: 5–15 min atomic task slicer & conflict detector will live here.</p>
+      <div class="plan-controls">
+        <button class="btn primary" id="toggle-form-btn">+ New Task / Commitment</button>
       </div>
+
+      <!-- New Task Form -->
+      <div class="card hidden" id="new-task-form">
+        <h3>Add to Schedule</h3>
+        <input type="text" id="task-title" placeholder="e.g., Neonatal Sepsis or Band Rehearsal" />
+        
+        <div class="form-row">
+          <select id="task-track">
+            <option value="clinical">Clinical (MBChB)</option>
+            <option value="german">German (A1–C1)</option>
+            <option value="licensing">Licensing (DE → CH)</option>
+            <option value="general">General Commitment</option>
+          </select>
+          <input type="date" id="task-date" />
+        </div>
+
+        <div class="form-row">
+          <input type="time" id="task-time" placeholder="Start time" />
+          <input type="number" id="task-duration" placeholder="Mins (e.g. 45)" min="5" max="480" value="30" />
+        </div>
+
+        <div id="conflict-warning" class="conflict-box hidden"></div>
+
+        <div class="btn-row">
+          <button class="btn primary" id="add-task-btn">Save Task</button>
+          <button class="btn secondary" id="cancel-task-btn">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Track Filter Pills -->
+      <div class="filter-bar" id="track-filters">
+        <button class="pill active" data-track="all">All</button>
+        <button class="pill" data-track="clinical">Clinical</button>
+        <button class="pill" data-track="german">German</button>
+        <button class="pill" data-track="licensing">Licensing</button>
+        <button class="pill" data-track="general">General</button>
+      </div>
+
+      <div id="task-list"></div>
     </section>
 
-    <!-- Roadmap View -->
+    <!-- ROADMAP VIEW -->
     <section id="view-roadmap" class="view">
       <div class="card">
         <h2>10-Year Pathway</h2>
+        <p class="muted">Track your macro progression from MBChB to Switzerland.</p>
         <ul class="pathway-list">
           <li><strong>Phase 1:</strong> MBChB 5th–6th Yr + German A1 → B2</li>
           <li><strong>Phase 2:</strong> Internship + Medical German C1 (FSP)</li>
@@ -52,13 +105,17 @@
           <li><strong>Phase 5:</strong> Switzerland (MEBEKO Indirect Recognition)</li>
         </ul>
       </div>
+      <div class="card">
+        <h3>Track Activity</h3>
+        <div id="roadmap-stats" class="stats-grid"></div>
+      </div>
     </section>
 
-    <!-- Vault View -->
+    <!-- VAULT VIEW -->
     <section id="view-vault" class="view">
       <div class="card">
         <h2>Portable Vault</h2>
-        <p class="muted">Export your entire journey as a single JSON file to move between devices.</p>
+        <p class="muted">Schema <strong id="schema-ver">v2</strong>. Export your journey as a single JSON file to transfer to any device.</p>
         <div class="btn-row">
           <button class="btn primary" id="export-btn">Export Vault (.json)</button>
           <label class="btn secondary">
@@ -70,6 +127,18 @@
       </div>
     </section>
   </main>
+
+  <!-- Floating Micro-Timer Bar -->
+  <div id="timer-bar" class="timer-bar hidden">
+    <div class="timer-info">
+      <span id="timer-label" class="timer-label">Atomic Step</span>
+      <strong id="timer-display">10:00</strong>
+    </div>
+    <div class="timer-actions">
+      <button class="btn-mini" id="timer-toggle">Pause</button>
+      <button class="btn-mini danger" id="timer-stop">Stop</button>
+    </div>
+  </div>
 
   <nav class="bottom-nav">
     <button class="nav-btn active" data-target="view-briefing">Briefing</button>
