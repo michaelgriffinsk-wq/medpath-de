@@ -200,7 +200,7 @@ async function callGemini(contents, customSystem = null) {
 
   for (const model of GEMINI_MODELS) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s max wait per model
+    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25s max for long plans
 
     try {
       const res = await fetch(
@@ -212,6 +212,7 @@ async function callGemini(contents, customSystem = null) {
           body: JSON.stringify({
             system_instruction: { parts: [{ text: customSystem || buildSystemContext() }] },
             generationConfig: {
+              maxOutputTokens: 8192,
               thinkingConfig: { thinkingLevel: "minimal" }
             },
             contents
@@ -222,7 +223,12 @@ async function callGemini(contents, customSystem = null) {
 
       const data = await res.json();
       if (res.ok) {
-        return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response received.";
+        const parts = data.candidates?.[0]?.content?.parts || [];
+        const fullText = parts
+          .filter((p) => !p.thought && p.text)
+          .map((p) => p.text)
+          .join("");
+        return fullText || "No response received.";
       }
 
       lastError = data.error?.message || `HTTP ${res.status}`;
