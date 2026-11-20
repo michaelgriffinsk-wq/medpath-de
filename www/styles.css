@@ -312,3 +312,38 @@ input, select, textarea {
 }
 .nav-btn { flex: 1; background: none; border: none; color: var(--muted); padding: 8px 2px; font-size: 0.78rem; font-weight: 600; }
 .nav-btn.active { color: var(--accent); }
+
+/* Gemini Live Mode */
+.live-trigger { background: var(--clinical); color: #0f172a; }
+.live-card { text-align: center; }
+.live-orb-wrap { padding: 18px 0 10px; display: flex; flex-direction: column; align-items: center; }
+.live-orb {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.live-orb.listening {
+  background: var(--accent);
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.55);
+  transform: scale(1.06);
+}
+.live-orb.speaking {
+  background: var(--clinical);
+  box-shadow: 0 0 28px rgba(16, 185, 129, 0.65);
+  transform: scale(1.12);
+}
+.live-transcript {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  height: 150px;
+  overflow-y: auto;
+  text-align: left;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.danger-btn { background: var(--danger); color: #fff; }
