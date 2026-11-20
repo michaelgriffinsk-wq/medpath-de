@@ -1,6 +1,6 @@
 const STORAGE_KEY = "medpath_de_vault";
 const API_KEY_STORAGE = "medpath_de_gemini_key";
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-3.8-flash";
 
 const MODES = [
   { name: "Holiday Sprint", capHours: 8, cls: "" },
